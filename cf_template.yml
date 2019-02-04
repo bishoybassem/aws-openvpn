@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Start an OpenVPN server
+Parameters:
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+  CACertificate:
+    Type: String
+  ServerCertificate:
+    Type: String
+Resources:
+  OpenVPNSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow ssh and openvpn ports
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: udp
+        FromPort: 1194
+        ToPort: 1194
+        CidrIp: 0.0.0.0/0
+  OpenVPNServer:
+    Type: AWS::EC2::Instance
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          packages:
+            apt:
+              openvpn: []
+              openssl: []
+              iptables-persistent: []
+          files:
+            /etc/openvpn/server/server.pem:
+              content: "{{resolve:ssm:OpenVPNPrivateKey:6}}"
+              mode: "000600"
+              owner: root
+              group: root
+            /etc/openvpn/server/server.crt:
+              content: !Ref ServerCertificate
+              mode: "000644"
+              owner: root
+              group: root
+            /etc/openvpn/server/ca.crt:
+              content: !Ref CACertificate
+              mode: "000644"
+              owner: root
+              group: root
+            /etc/openvpn/server/serverudp.conf:
+              content: |
+                server 10.8.0.0 255.255.255.0
+                dev tun
+                ca ca.crt
+                dh dh.pem
+                cert server.crt
+                key server.pem
+                push "redirect-gateway def1"
+              mode: "000644"
+              owner: root
+              group: root
+          commands:
+            c1:
+              command: openssl dhparam -out /etc/openvpn/server/dh.pem 1024
+    Properties:
+      InstanceType: t2.micro
+      ImageId: ami-02083b16c5cc6c38e
+      SecurityGroups:
+      - !Ref OpenVPNSecurityGroup
+      KeyName: !Ref KeyName
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash -xe
+            apt-get update
+            apt-get install -y python-pip
+            pip install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz
+            cfn-init -v --stack ${AWS::StackName} --resource OpenVPNServer --region ${AWS::Region}
+            sed -i 's/#net\.ipv4\.ip_forward.*/net.ipv4.ip_forward=1/' /etc/sysctl.conf
+            sysctl -w net.ipv4.ip_forward=1
+            iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE
+            iptables-save > /etc/iptables/rules.v4
+            systemctl enable openvpn-server@serverudp
+            systemctl start openvpn-server@serverudp
+
