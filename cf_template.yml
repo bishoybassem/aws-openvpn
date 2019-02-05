@@ -26,7 +26,45 @@ Resources:
     Type: AWS::EC2::Instance
     Metadata:
       AWS::CloudFormation::Init:
-        config:
+        setupCfnHup:
+          files:
+            /etc/cfn/cfn-hup.conf:
+              content: !Sub |
+                [main]
+                stack=${AWS::StackName}
+                region=${AWS::Region}
+                interval=1
+                verbose=true
+              mode: "000400"
+              owner: root
+              group: root
+            /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+              content: !Sub |
+                [cfn-auto-reloader-hook]
+                triggers=post.update
+                path=Resources.OpenVPNServer.Metadata
+                action=/usr/local/bin/cfn-init -v --configsets update --stack ${AWS::StackName} --resource OpenVPNServer --region ${AWS::Region}
+                runas=root
+              mode: "000400"
+              owner: root
+              group: root
+            /etc/systemd/system/cfn-hup.service:
+              content: !Sub |
+                [Unit]
+                Description=Cfn-hup daemon
+                [Service]
+                ExecStart=/usr/local/bin/cfn-hup -v
+                [Install]
+                WantedBy=multi-user.target
+              mode: "000600"
+              owner: root
+              group: root
+          commands:
+            enableService:
+              command: systemctl enable cfn-hup
+            restartService:
+              command: systemctl start cfn-hup
+        setupServer:
           packages:
             apt:
               openvpn: []
@@ -34,7 +72,7 @@ Resources:
               iptables-persistent: []
           files:
             /etc/openvpn/server/server.pem:
-              content: "{{resolve:ssm:OpenVPNPrivateKey:6}}"
+              content: "{{resolve:ssm:OpenVPNPrivateKey:16}}"
               mode: "000600"
               owner: root
               group: root
@@ -61,8 +99,36 @@ Resources:
               owner: root
               group: root
           commands:
-            c1:
+            generateDHparams:
               command: openssl dhparam -out /etc/openvpn/server/dh.pem 1024
+            natClientTraffic:
+              command: iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE
+            saveRules:
+              command: iptables-save > /etc/iptables/rules.v4
+            enableIpv4Forwarding:
+              command: sysctl -w net.ipv4.ip_forward=1
+            changeIpv4ForwardingConfig:
+              command: sed -i 's/#net\.ipv4\.ip_forward.*/net.ipv4.ip_forward=1/' /etc/sysctl.conf
+        startServer:
+          commands:
+            enableService:
+              command: systemctl enable openvpn-server@serverudp
+            startService:
+              command: systemctl start openvpn-server@serverudp
+        restartServer:
+          commands:
+            daemonReload:
+              command: systemctl daemon-reload
+            restartService:
+              command: systemctl restart openvpn-server@serverudp
+        configSets:
+          default:
+          - setupCfnHup
+          - setupServer
+          - startServer
+          update:
+          - setupServer
+          - restartServer
     Properties:
       InstanceType: t2.micro
       ImageId: ami-02083b16c5cc6c38e
@@ -77,10 +143,4 @@ Resources:
             apt-get install -y python-pip
             pip install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz
             cfn-init -v --stack ${AWS::StackName} --resource OpenVPNServer --region ${AWS::Region}
-            sed -i 's/#net\.ipv4\.ip_forward.*/net.ipv4.ip_forward=1/' /etc/sysctl.conf
-            sysctl -w net.ipv4.ip_forward=1
-            iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE
-            iptables-save > /etc/iptables/rules.v4
-            systemctl enable openvpn-server@serverudp
-            systemctl start openvpn-server@serverudp
 
