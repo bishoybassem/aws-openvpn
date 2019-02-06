@@ -8,6 +8,9 @@ Parameters:
     Type: String
   ServerCertificate:
     Type: String
+  ServerPrivateKey:
+    Type: String
+    NoEcho: true
 Resources:
   OpenVPNSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -72,7 +75,7 @@ Resources:
               iptables-persistent: []
           files:
             /etc/openvpn/server/server.pem:
-              content: "{{resolve:ssm:OpenVPNPrivateKey:16}}"
+              content: !Ref ServerPrivateKey
               mode: "000600"
               owner: root
               group: root
