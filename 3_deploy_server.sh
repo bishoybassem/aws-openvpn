@@ -1,8 +1,8 @@
 #!/bin/bash -e
 
-KEY_PAIR_NAME=$1
+key_pair_name=$1
 
-if [[ "$KEY_PAIR_NAME" == "" ]]; then
+if [[ "$key_pair_name" == "" ]]; then
     echo "Please provide the key pair name to be used"
     exit 1
 fi
@@ -17,7 +17,7 @@ fi
 
 # Create/update the cloudformation stack from template file.
 aws cloudformation ${ACTION} --stack-name openvpn --template-body file://cf_template.yml --parameters \
-    "ParameterKey=KeyName,ParameterValue=$KEY_PAIR_NAME" \
+    "ParameterKey=KeyName,ParameterValue=$key_pair_name" \
     "ParameterKey=ServerCertificate,ParameterValue=$(cat data/server.crt)" \
     "ParameterKey=CACertificate,ParameterValue=$(cat data/ca.crt)" \
     "ParameterKey=ServerPrivateKey,ParameterValue=$(cat data/server.pem)"
