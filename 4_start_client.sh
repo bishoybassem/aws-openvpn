@@ -6,4 +6,4 @@ server_ip=$(aws ec2 describe-instances --filter "Name=tag:aws:cloudformation:log
 cd data
 
 # Start the vpn client
-sudo openvpn --client --remote ${server_ip} --dev tun --ca ca.crt --key client.pem --cert client.crt
+sudo openvpn --client --remote ${server_ip} --dev tun --ca ca.crt --key client.pem --cert client.crt --proto tcp-client

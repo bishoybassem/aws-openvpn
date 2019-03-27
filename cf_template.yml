@@ -21,7 +21,7 @@ Resources:
         FromPort: 22
         ToPort: 22
         CidrIp: 0.0.0.0/0
-      - IpProtocol: udp
+      - IpProtocol: tcp
         FromPort: 1194
         ToPort: 1194
         CidrIp: 0.0.0.0/0
@@ -89,9 +89,10 @@ Resources:
               mode: "000644"
               owner: root
               group: root
-            /etc/openvpn/server/serverudp.conf:
+            /etc/openvpn/server/servertcp.conf:
               content: |
                 server 10.8.0.0 255.255.255.0
+                proto tcp-server
                 dev tun
                 ca ca.crt
                 dh dh.pem
@@ -115,15 +116,15 @@ Resources:
         startServer:
           commands:
             enableService:
-              command: systemctl enable openvpn-server@serverudp
+              command: systemctl enable openvpn-server@servertcp
             startService:
-              command: systemctl start openvpn-server@serverudp
+              command: systemctl start openvpn-server@servertcp
         restartServer:
           commands:
             daemonReload:
               command: systemctl daemon-reload
             restartService:
-              command: systemctl restart openvpn-server@serverudp
+              command: systemctl restart openvpn-server@servertcp
         configSets:
           default:
           - setupCfnHup
