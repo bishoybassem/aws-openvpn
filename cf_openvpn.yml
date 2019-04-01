@@ -1,9 +1,16 @@
 AWSTemplateFormatVersion: 2010-09-09
 Description: Start an OpenVPN server
+
 Parameters:
   KeyName:
     Type: AWS::EC2::KeyPair::KeyName
     Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+  MainVPCImportId:
+    Type: String
+    Default: network-MainVPCId
+  PublicSubnetImportId:
+    Type: String
+    Default: network-PublicSubnetId
   CACertificate:
     Type: String
   ServerCertificate:
@@ -11,11 +18,14 @@ Parameters:
   ServerPrivateKey:
     Type: String
     NoEcho: true
+
 Resources:
   OpenVPNSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Allow ssh and openvpn ports
+      VpcId:
+        Fn::ImportValue: !Ref MainVPCImportId
       SecurityGroupIngress:
       - IpProtocol: tcp
         FromPort: 22
@@ -135,10 +145,15 @@ Resources:
           - restartServer
     Properties:
       InstanceType: t2.micro
-      ImageId: ami-02083b16c5cc6c38e
-      SecurityGroups:
+      ImageId: ami-05449f21272b4ee56
+      SubnetId:
+        Fn::ImportValue: !Ref PublicSubnetImportId
+      SecurityGroupIds:
       - !Ref OpenVPNSecurityGroup
       KeyName: !Ref KeyName
+      Tags:
+      - Key: Name
+        Value: openvpn
       UserData:
         Fn::Base64:
           !Sub |
@@ -148,3 +163,6 @@ Resources:
             pip install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz
             cfn-init -v --stack ${AWS::StackName} --resource OpenVPNServer --region ${AWS::Region}
 
+Outputs:
+  OpenVPNServerPublicIp:
+    Value: !GetAtt OpenVPNServer.PublicIp
