@@ -21,19 +21,23 @@ and configured with your IAM user's access keys. ([guide](https://docs.aws.amazo
 1. Clone the repository, and navigate to the clone directory.
 2. Generate keys and certificates for the CA, server and client:
    ```bash
-   ./gen_ca.sh
-   ./gen_certs.sh
+   ./vpncli gen_ca
+   ./vpncli gen_certs
    ```
-3. Run the stacks deployment script, and provide the name of the key pair that you created earlier:
+3. Run the deployment command, and provide the name of the key pair that you created earlier:
    ```bash
-   ./deploy_stacks.sh {KEY_PAIR_NAME_HERE}
+   ./vpncli deploy {KEY_PAIR_NAME_HERE}
    ```
-   For each stack, the script would first show the change set, ask for your confirmation, deploy the change set, and finally display the stack's outputs.
-4. Start the client:
+   For each CF stack, the script would first show the change set, ask for your confirmation, deploy the change set, and finally display the stack's outputs.
+4. To start the OpenVPN client:
    ```bash
-   ./start_client.sh
+   ./vpncli connect
    ```
-5. To delete and free up all used resources:
+4. To disconnect from the VPN:
    ```bash
-   ./delete_stacks.sh
+   ./vpncli disconnect
+   ```
+5. To delete the stacks and free up all used AWS resources:
+   ```bash
+   ./vpncli undeploy
    ```

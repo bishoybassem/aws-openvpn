@@ -1,0 +1,157 @@
+#!/bin/bash -e
+
+function generate_ca() {
+    # Generate CA's private key and a self signed certificate to act as the root certificate.
+    echo "Generating CA's private key and certificate..."
+    openssl req -newkey rsa:4096 -nodes -keyout ca.pem -x509 -days 10000 -subj "/CN=openvpn_ca" -out ca.crt
+
+    echo "Done"
+}
+
+function generate_certs() {
+    entity=$1
+
+    echo "Generating $entity's private key and certificate..."
+    # Generate private key and a certificate signing request.
+    openssl req -newkey rsa:2046 -nodes -keyout ${entity}.pem -new -subj "/CN=openvpn_$entity" -out ${entity}.csr
+    # Sign the certificate request.
+    openssl x509 -req -CA ca.crt -CAkey ca.pem -CAcreateserial -in ${entity}.csr -days 1000 -out ${entity}.crt
+
+    echo "Done"
+}
+
+function review_and_deploy_stack() {
+    stack_name=$1
+    template_file=cf_${stack_name}.yml
+
+    echo "Evaluating change set for $stack_name stack..."
+    change_set_cmd=$(aws cloudformation deploy --stack-name ${stack_name} --template-file ${template_file} \
+                --parameter-overrides "${@:2}" --no-fail-on-empty-changeset \
+                --no-execute-changeset | grep describe-change-set || true)
+
+    if [ -z "$change_set_cmd" ]; then
+        echo "No changes found!"
+        return 0
+    fi
+
+    echo "Change set preview:"
+    eval ${change_set_cmd}
+
+    read -p "Please enter 'y' to proceed or 'n' to abort: " choice
+    if [ "$choice" != "y" ]; then
+        echo "Aborted!"
+        return 0
+    fi
+
+    echo "Deploying $stack_name stack..."
+    aws cloudformation deploy --stack-name ${stack_name} --template-file ${template_file} \
+                --parameter-overrides "${@:2}" --no-fail-on-empty-changeset
+
+    echo "Stack outputs:"
+    aws cloudformation describe-stacks --stack-name ${stack_name} --query 'Stacks[*].Outputs'
+}
+
+function deploy_stacks() {
+    key_pair_name=$1
+
+    if [ "$key_pair_name" == "" ]; then
+        echo "Please provide the key pair name to be used"
+        exit 1
+    fi
+
+    review_and_deploy_stack network "none=none"
+
+    review_and_deploy_stack openvpn "KeyName=$key_pair_name" \
+        "ServerCertificate=$(cat data/server.crt)" \
+        "CACertificate=$(cat data/ca.crt)" \
+        "ServerPrivateKey=$(cat data/server.pem)"
+}
+
+function start_client() {
+    if nc -z localhost 7505; then
+        echo "Openvpn client is already running!"
+        exit 0
+    fi
+
+    # Get the public ip of the deployed openvpn server.
+    server_ip=$(aws ec2 describe-instances --filter "Name=tag:Name,Values=openvpn" \
+        --query "Reservations[*].Instances[*].PublicIpAddress" --output text)
+
+    if [ -z "$server_ip" ]; then
+        echo "No openvpn server found, please deploy it first!"
+        exit 1
+    fi
+
+    echo "Starting vpn connection to remote ($server_ip)..."
+    sudo openvpn --client --proto tcp-client --remote ${server_ip} --dev tun \
+        --ca data/ca.crt --key data/client.pem --cert data/client.crt --management 127.0.0.1 7505 --daemon
+
+    echo "Waiting for client to connect..."
+    until echo state | nc -q 1 localhost 7505 | grep CONNECTED &> /dev/null; do
+        if ! nc -z localhost 7505; then
+            echo "Client exited! Please check the logs!"
+            exit 1
+        fi
+        sleep 5s
+    done
+
+    echo "Client connected successfully!"
+}
+
+function stop_client() {
+    if ! nc -z localhost 7505; then
+        echo "No openvpn client running!"
+        exit 0
+    fi
+
+    echo signal SIGTERM | nc -q 1 localhost 7505 &> /dev/null
+
+    echo "Client disconnected!"
+}
+
+function delete_stack() {
+    stack_name=$1
+
+    echo "Deleting $stack_name stack..."
+    aws cloudformation delete-stack --stack-name ${stack_name}
+
+    echo "Waiting for action to complete..."
+    aws cloudformation wait stack-delete-complete --stack-name ${stack_name}
+}
+
+mkdir -p data
+case $1 in
+    gen_ca)
+        cd data
+        generate_ca
+        ;;
+    gen_certs)
+        cd data
+        generate_certs server
+        generate_certs client
+        ;;
+    deploy)
+        deploy_stacks $2
+        ;;
+    connect)
+        start_client
+        ;;
+    disconnect)
+        stop_client
+        ;;
+    undeploy)
+        delete_stack openvpn
+        delete_stack network
+        ;;
+    *)
+        echo -e "Usages: vpncli [COMMAND] [ARGS]\n"
+        echo -e "Commands:"
+        echo -e "  gen_ca           \t Generate the CA's private key and root certificate"
+        echo -e "  gen_certs        \t Generate keys and certificates for the server and client"
+        echo -e "                   \t (signed by the CA generated earlier)"
+        echo -e "  deploy [KEY NAME]\t Deploy the OpenVPN server to AWS"
+        echo -e "  connect          \t Connect to the deployed OpenVPN server"
+        echo -e "  disconnect       \t Disconnect from the VPN"
+        echo -e "  undeploy         \t Delete the OpenVPN server and free up all used AWS resources"
+        ;;
+esac
