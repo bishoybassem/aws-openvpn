@@ -5,6 +5,8 @@ Parameters:
   KeyName:
     Type: AWS::EC2::KeyPair::KeyName
     Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+  InstanceImageId:
+    Type: AWS::EC2::Image::Id
   MainVPCImportId:
     Type: String
     Default: network-MainVPCId
@@ -31,7 +33,7 @@ Resources:
         FromPort: 22
         ToPort: 22
         CidrIp: 0.0.0.0/0
-      - IpProtocol: tcp
+      - IpProtocol: udp
         FromPort: 1194
         ToPort: 1194
         CidrIp: 0.0.0.0/0
@@ -80,7 +82,7 @@ Resources:
         setupServer:
           packages:
             apt:
-              openvpn: []
+              openvpn: ["2.4.7-1"]
               openssl: []
               iptables-persistent: []
           files:
@@ -102,8 +104,11 @@ Resources:
             /etc/openvpn/server/servertcp.conf:
               content: |
                 server 10.8.0.0 255.255.255.0
-                proto tcp-server
+                proto udp
                 dev tun
+                keepalive 30 60
+                remote-cert-tls client
+                cipher AES-256-CBC
                 ca ca.crt
                 dh dh.pem
                 cert server.crt
@@ -114,7 +119,7 @@ Resources:
               group: root
           commands:
             generateDHparams:
-              command: openssl dhparam -out /etc/openvpn/server/dh.pem 1024
+              command: openssl dhparam -out /etc/openvpn/server/dh.pem 2048
             natClientTraffic:
               command: iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE
             saveRules:
@@ -145,7 +150,7 @@ Resources:
           - restartServer
     Properties:
       InstanceType: t2.micro
-      ImageId: ami-05449f21272b4ee56
+      ImageId: !Ref InstanceImageId
       SubnetId:
         Fn::ImportValue: !Ref PublicSubnetImportId
       SecurityGroupIds:

@@ -1,23 +1,44 @@
 #!/bin/bash -e
 
+function use_region() {
+    region_name=$1
+
+    output=$(aws ec2 describe-regions --filters "Name=region-name,Values=$region_name" --output text)
+    if [ -z "$output" ]; then
+        echo "Please provide a valid AWS region name!"
+        exit 1
+    fi
+
+    echo "$region_name" > region_name
+    echo "Saved!"
+}
+
+function set_region() {
+    if [ -f data/region_name ]; then
+        export AWS_DEFAULT_REGION=$(cat data/region_name)
+    fi
+}
+
 function generate_ca() {
     # Generate CA's private key and a self signed certificate to act as the root certificate.
     echo "Generating CA's private key and certificate..."
     openssl req -newkey rsa:4096 -nodes -keyout ca.pem -x509 -days 10000 -subj "/CN=openvpn_ca" -out ca.crt
 
-    echo "Done"
+    echo "Done!"
 }
 
 function generate_certs() {
     entity=$1
+    eku=$2
 
     echo "Generating $entity's private key and certificate..."
     # Generate private key and a certificate signing request.
-    openssl req -newkey rsa:2046 -nodes -keyout ${entity}.pem -new -subj "/CN=openvpn_$entity" -out ${entity}.csr
+    openssl req -newkey rsa:2048 -nodes -keyout ${entity}.pem -new -subj "/CN=openvpn_$entity" -out ${entity}.csr
     # Sign the certificate request.
-    openssl x509 -req -CA ca.crt -CAkey ca.pem -CAcreateserial -in ${entity}.csr -days 1000 -out ${entity}.crt
+    openssl x509 -req -CA ca.crt -CAkey ca.pem -CAcreateserial -in ${entity}.csr -days 1000 \
+        -extfile <(echo -e "keyUsage = digitalSignature,keyAgreement,keyEncipherment \nextendedKeyUsage = $eku") -out ${entity}.crt
 
-    echo "Done"
+    echo "Done!"
 }
 
 function review_and_deploy_stack() {
@@ -54,14 +75,18 @@ function review_and_deploy_stack() {
 function deploy_stacks() {
     key_pair_name=$1
 
-    if [ "$key_pair_name" == "" ]; then
-        echo "Please provide the key pair name to be used"
+    if [ -z "$key_pair_name" ]; then
+        echo "Please provide the key pair name to be used!"
         exit 1
     fi
 
     review_and_deploy_stack network "none=none"
 
+    image_id=$(aws ec2 describe-images --filters "Name=name,Values=debian-10-amd64-20200425-243" \
+        "Name=owner-id,Values=136693071363" --query 'Images[0].ImageId' --output text)
+
     review_and_deploy_stack openvpn "KeyName=$key_pair_name" \
+        "InstanceImageId=$image_id" \
         "ServerCertificate=$(cat data/server.crt)" \
         "CACertificate=$(cat data/ca.crt)" \
         "ServerPrivateKey=$(cat data/server.pem)"
@@ -83,11 +108,12 @@ function start_client() {
     fi
 
     echo "Starting vpn connection to remote ($server_ip)..."
-    sudo openvpn --client --proto tcp-client --remote ${server_ip} --dev tun \
-        --ca data/ca.crt --key data/client.pem --cert data/client.crt --management 127.0.0.1 7505 --daemon
+    sudo openvpn --client --proto udp --remote ${server_ip} --dev tun \
+        --ca $(pwd)/data/ca.crt --key $(pwd)/data/client.pem --cert $(pwd)/data/client.crt \
+        --remote-cert-tls server --cipher AES-256-CBC --management 127.0.0.1 7505 --daemon
 
     echo "Waiting for client to connect..."
-    until echo state | nc -q 1 localhost 7505 | grep CONNECTED &> /dev/null; do
+    until echo state | nc -q 1 localhost 7505 | grep -Fq CONNECTED; do
         if ! nc -z localhost 7505; then
             echo "Client exited! Please check the logs!"
             exit 1
@@ -121,33 +147,41 @@ function delete_stack() {
 
 mkdir -p data
 case $1 in
-    gen_ca)
+    use-region)
+        cd data
+        use_region $2
+        ;;
+    gen-ca)
         cd data
         generate_ca
         ;;
-    gen_certs)
+    gen-certs)
         cd data
-        generate_certs server
-        generate_certs client
+        generate_certs server serverAuth
+        generate_certs client clientAuth
         ;;
     deploy)
+        set_region
         deploy_stacks $2
         ;;
     connect)
+        set_region
         start_client
         ;;
     disconnect)
         stop_client
         ;;
     undeploy)
+        set_region
         delete_stack openvpn
         delete_stack network
         ;;
     *)
         echo -e "Usages: vpncli [COMMAND] [ARGS]\n"
         echo -e "Commands:"
-        echo -e "  gen_ca           \t Generate the CA's private key and root certificate"
-        echo -e "  gen_certs        \t Generate keys and certificates for the server and client"
+        echo -e "  use-region [NAME]\t Specify the AWS region to use"
+        echo -e "  gen-ca           \t Generate the CA's private key and root certificate"
+        echo -e "  gen-certs        \t Generate keys and certificates for the server and client"
         echo -e "                   \t (signed by the CA generated earlier)"
         echo -e "  deploy [KEY NAME]\t Deploy the OpenVPN server to AWS"
         echo -e "  connect          \t Connect to the deployed OpenVPN server"
